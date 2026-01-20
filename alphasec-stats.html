@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>AlphaSec Stats Dashboard (Paste JSON, Split Charts)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #020617;
+      color: #e5e7eb;
+    }
+
+    .container {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px 16px 64px;
+    }
+
+    h1 {
+      font-size: 28px;
+      margin-bottom: 4px;
+    }
+
+    h2 {
+      margin-top: 32px;
+      margin-bottom: 12px;
+      font-size: 20px;
+    }
+
+    .subtitle {
+      color: #9ca3af;
+      font-size: 14px;
+      margin-bottom: 16px;
+    }
+
+    .json-input-container {
+      margin-bottom: 20px;
+    }
+
+    .json-input-label {
+      font-size: 13px;
+      color: #9ca3af;
+      margin-bottom: 6px;
+      display: block;
+    }
+
+    #jsonInput {
+      width: 100%;
+      min-height: 140px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(75, 85, 99, 0.9);
+      background: #020617;
+      color: #e5e7eb;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      resize: vertical;
+    }
+
+    #loadJsonButton {
+      margin-top: 8px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(129, 140, 248, 0.8);
+      background: #111827;
+      color: #e5e7eb;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    #loadJsonButton:hover {
+      background: #1f2937;
+    }
+
+    .hint {
+      font-size: 12px;
+      color: #9ca3af;
+      margin-top: 4px;
+    }
+
+    .overview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+
+    .card {
+      background: radial-gradient(circle at top left, #0f172a, #020617);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: 14px;
+      padding: 12px 14px;
+    }
+
+    .card-title {
+      font-size: 12px;
+      color: #9ca3af;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .card-value {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    /* Chart 카드: 고정 높이 + flex */
+    .chart-card {
+      background: #020617;
+      border-radius: 14px;
+      padding: 16px;
+      border: 1px solid rgba(75, 85, 99, 0.6);
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.9);
+      height: 260px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .chart-title {
+      font-size: 14px;
+      margin-bottom: 4px;
+      flex: 0 0 auto;
+    }
+
+    .chart-subtitle {
+      font-size: 12px;
+      color: #6b7280;
+      margin-bottom: 8px;
+      flex: 0 0 auto;
+    }
+
+    .chart-card canvas {
+      flex: 1 1 auto;
+      width: 100% !important;
+    }
+
+    .table-wrapper {
+      max-height: 360px;
+      overflow: auto;
+      border-radius: 12px;
+      border: 1px solid rgba(55, 65, 81, 0.8);
+      box-shadow: 0 14px 30px rgba(15, 23, 42, 0.9);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    thead {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    th, td {
+      padding: 8px 10px;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    thead tr {
+      background: #020617;
+      border-bottom: 1px solid #1f2937;
+    }
+
+    tbody tr:nth-child(even) { background: #020617; }
+    tbody tr:nth-child(odd) { background: #030712; }
+
+    tbody tr:hover { background: #111827; }
+
+    th {
+      font-weight: 500;
+      color: #9ca3af;
+    }
+
+    td.mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 11px;
+    }
+
+    .tag {
+      display: inline-flex;
+      padding: 2px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      font-size: 10px;
+      color: #9ca3af;
+      margin-left: 6px;
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 11px;
+      margin-top: 4px;
+    }
+
+    .pill {
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(75, 85, 99, 0.7);
+      color: #d1d5db;
+    }
+
+    .error {
+      margin-top: 12px;
+      font-size: 13px;
+      color: #f97373;
+    }
+
+    @media (max-width: 768px) {
+      .card-value { font-size: 16px; }
+      h1 { font-size: 22px; }
+      .chart-card { height: 240px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>AlphaSec Stats Dashboard</h1>
+    <div class="subtitle">
+      <code>https://api.alphasec.trade/api/v1/stats</code> 응답 JSON을 붙여넣어 시각화합니다.
+    </div>
+
+    <div class="json-input-container">
+      <label for="jsonInput" class="json-input-label">
+        JSON 입력
+      </label>
+      <textarea
+        id="jsonInput"
+        placeholder="https://api.alphasec.trade/api/v1/stats 리턴을 붙여넣으세요"
+      ></textarea>
+      <button id="loadJsonButton">대시보드 업데이트</button>
+      <div class="hint">
+        ※ <code>{ code, errMsg, result: { overview, charts, tables } }</code> 구조를 가정합니다.
+      </div>
+    </div>
+
+    <!-- Overview cards -->
+    <div class="overview-grid">
+      <div class="card">
+        <div class="card-title">Total Volume (USDT)</div>
+        <div class="card-value" id="totalVolume">-</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Total Balance (USDT)</div>
+        <div class="card-value" id="totalBalance">-</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Total Traders</div>
+        <div class="card-value" id="totalTraders">-</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Total Trades</div>
+        <div class="card-value" id="totalTrades">-</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Total Fees (USDT)</div>
+        <div class="card-value" id="totalFees">-</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Total Rewards (USDT)</div>
+        <div class="card-value" id="totalRewards">-</div>
+      </div>
+    </div>
+
+    <!-- Charts: split daily / cumulative -->
+    <h2>Volume</h2>
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title">Daily Volume</div>
+        <div class="chart-subtitle">dailyVolume (USDT)</div>
+        <canvas id="dailyVolumeChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Cumulative Volume</div>
+        <div class="chart-subtitle">cumulativeVolume (USDT)</div>
+        <canvas id="cumulativeVolumeChart"></canvas>
+      </div>
+    </div>
+
+    <h2>Net Inflows / Balance</h2>
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title">Daily Net Inflows</div>
+        <div class="chart-subtitle">dailyNetInflows (USDT)</div>
+        <canvas id="dailyNetInflowsChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Cumulative Net Inflows</div>
+        <div class="chart-subtitle">cumulativeNetInflows (USDT)</div>
+        <canvas id="cumulativeNetInflowsChart"></canvas>
+      </div>
+    </div>
+
+    <h2>Traders</h2>
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title">Daily New Traders</div>
+        <div class="chart-subtitle">dailyNewTraders</div>
+        <canvas id="dailyNewTradersChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Cumulative Traders</div>
+        <div class="chart-subtitle">cumulativeTraders</div>
+        <canvas id="cumulativeTradersChart"></canvas>
+      </div>
+    </div>
+
+    <h2>Trades</h2>
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title">Daily Trades</div>
+        <div class="chart-subtitle">dailyTrades</div>
+        <canvas id="dailyTradesChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Cumulative Trades</div>
+        <div class="chart-subtitle">cumulativeTrades</div>
+        <canvas id="cumulativeTradesChart"></canvas>
+      </div>
+    </div>
+
+    <h2>Fees & Rewards</h2>
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title">Daily Fees</div>
+        <div class="chart-subtitle">dailyFees (USDT)</div>
+        <canvas id="dailyFeesChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Cumulative Rewards</div>
+        <div class="chart-subtitle">cumulativeRewards (USDT)</div>
+        <canvas id="cumulativeRewardsChart"></canvas>
+      </div>
+    </div>
+
+    <h2>Trader Shares by Token</h2>
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title">
+          Trader Shares by Token
+          <span class="tag">unique traders</span>
+        </div>
+        <div class="chart-subtitle">Stacked by tokenSymbol</div>
+        <canvas id="traderSharesChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Token share summary -->
+    <h2>Token별 트레이더 분포 요약</h2>
+    <div class="card">
+      <div id="tokenShareSummary">JSON을 붙여넣고 대시보드를 업데이트하면 내용이 표시됩니다.</div>
+    </div>
+
+    <!-- Tables -->
+    <h2>Top Traders by Volume</h2>
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Address</th>
+            <th>Volume (USDT)</th>
+          </tr>
+        </thead>
+        <tbody id="topTradersTableBody"></tbody>
+      </table>
+    </div>
+
+    <h2>Top Depositors</h2>
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Address</th>
+            <th>Deposits (USDT)</th>
+          </tr>
+        </thead>
+        <tbody id="topDepositorsTableBody"></tbody>
+      </table>
+    </div>
+
+    <h2>Top Account Balances</h2>
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Address</th>
+            <th>Balance (USDT)</th>
+          </tr>
+        </thead>
+        <tbody id="topBalancesTableBody"></tbody>
+      </table>
+    </div>
+
+    <div id="errorBox" class="error"></div>
+  </div>
+
+  <script>
+    // Chart.js 인스턴스 저장 (key = canvas id)
+    const chartInstances = {};
+
+    function formatNumber(x) {
+      if (x === null || x === undefined) return "-";
+      const n = Number(x);
+      if (Number.isNaN(n)) return String(x);
+      return n.toLocaleString("en-US");
+    }
+
+    // y축 축약 (K, M, B)
+    function formatYAxis(x) {
+      const n = Number(x);
+      if (Number.isNaN(n)) return "";
+      const abs = Math.abs(n);
+
+      if (abs >= 1_000_000_000) {
+        return (n / 1_000_000_000).toFixed(1) + "B";
+      } else if (abs >= 1_000_000) {
+        return (n / 1_000_000).toFixed(1) + "M";
+      } else if (abs >= 1_000) {
+        return (n / 1_000).toFixed(1) + "K";
+      } else {
+        return String(n);
+      }
+    }
+
+    function formatDateFromUnixSeconds(sec) {
+      const d = new Date(sec * 1000);
+      return d.toISOString().slice(0, 10); // YYYY-MM-DD
+    }
+
+    function setOverview(overview) {
+      document.getElementById("totalVolume").textContent = formatNumber(overview.totalVolume);
+      document.getElementById("totalBalance").textContent = formatNumber(overview.totalBalance);
+      document.getElementById("totalTraders").textContent = formatNumber(overview.totalTraders);
+      document.getElementById("totalTrades").textContent = formatNumber(overview.totalTrades);
+      document.getElementById("totalFees").textContent = formatNumber(overview.totalFees);
+      document.getElementById("totalRewards").textContent = formatNumber(overview.totalRewards);
+    }
+
+    function buildLineChart(canvasId, labels, data, datasetLabel) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+
+      if (chartInstances[canvasId]) {
+        chartInstances[canvasId].destroy();
+      }
+
+      chartInstances[canvasId] = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [{
+            label: datasetLabel,
+            data,
+            borderWidth: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              labels: {
+                color: "#e5e7eb",
+                font: { size: 11 }
+              }
+            },
+            tooltip: {
+              callbacks: {
+                label: function (context) {
+                  const label = context.dataset.label || "";
+                  const value = context.parsed.y;
+                  return label + ": " + formatNumber(value);
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              ticks: { color: "#9ca3af", maxRotation: 0, autoSkip: true },
+              grid: { color: "rgba(55,65,81,0.4)" }
+            },
+            y: {
+              ticks: {
+                color: "#9ca3af",
+                maxTicksLimit: 6,
+                callback: function (value) {
+                  return formatYAxis(value);
+                }
+              },
+              grid: { color: "rgba(55,65,81,0.25)" }
+            }
+          }
+        }
+      });
+    }
+
+    function buildStackedBarChartForTraderShares(canvasId, traderShares) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+
+      if (chartInstances[canvasId]) {
+        chartInstances[canvasId].destroy();
+      }
+
+      const labels = traderShares.map(entry => formatDateFromUnixSeconds(entry.time));
+
+      const tokenSet = new Set();
+      traderShares.forEach(entry => {
+        (entry.tokenShares || []).forEach(ts => tokenSet.add(ts.tokenSymbol));
+      });
+      const tokenSymbols = Array.from(tokenSet);
+
+      const datasets = tokenSymbols.map(symbol => {
+        const data = traderShares.map(entry => {
+          const ts = (entry.tokenShares || []).find(t => t.tokenSymbol === symbol);
+          return ts ? ts.traderCount : 0;
+        });
+        return {
+          label: symbol,
+          data,
+          borderWidth: 1
+        };
+      });
+
+      chartInstances[canvasId] = new Chart(ctx, {
+        type: "bar",
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              labels: {
+                color: "#e5e7eb",
+                font: { size: 11 }
+              }
+            },
+            tooltip: {
+              callbacks: {
+                label: function (context) {
+                  const label = context.dataset.label || "";
+                  const value = context.parsed.y;
+                  return label + ": " + formatNumber(value);
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              stacked: true,
+              ticks: { color: "#9ca3af", maxRotation: 0, autoSkip: true },
+              grid: { color: "rgba(55,65,81,0.4)" }
+            },
+            y: {
+              stacked: true,
+              ticks: {
+                color: "#9ca3af",
+                maxTicksLimit: 6,
+                callback: function (value) {
+                  return formatYAxis(value);
+                }
+              },
+              grid: { color: "rgba(55,65,81,0.25)" }
+            }
+          }
+        }
+      });
+    }
+
+    function setTokenShareSummary(traderShares) {
+      const container = document.getElementById("tokenShareSummary");
+      if (!traderShares || traderShares.length === 0) {
+        container.textContent = "데이터가 없습니다.";
+        return;
+      }
+      const latest = traderShares[traderShares.length - 1];
+      const total = latest.uniqueTraders || 0;
+
+      if (!latest.tokenShares || latest.tokenShares.length === 0) {
+        container.textContent = "마지막 스냅샷에 tokenShares 데이터가 없습니다.";
+        return;
+      }
+
+      let html = "";
+      html += `<div>마지막 스냅샷 기준 날짜: <b>${formatDateFromUnixSeconds(latest.time)}</b></div>`;
+      html += `<div>Unique traders: <b>${formatNumber(total)}</b></div>`;
+      html += `<div class="pill-row">`;
+      latest.tokenShares.forEach(ts => {
+        const share = total > 0 ? ((ts.traderCount / total) * 100).toFixed(1) : "0.0";
+        html += `<span class="pill">${ts.tokenSymbol} · ${formatNumber(ts.traderCount)}명 · ${share}%</span>`;
+      });
+      html += `</div>`;
+      container.innerHTML = html;
+    }
+
+    function fillTable(bodyId, rows, addressKey, valueKey) {
+      const tbody = document.getElementById(bodyId);
+      tbody.innerHTML = "";
+      if (!rows || rows.length === 0) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 3;
+        td.textContent = "데이터가 없습니다.";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+      rows.forEach((row, idx) => {
+        const tr = document.createElement("tr");
+
+        const tdIndex = document.createElement("td");
+        tdIndex.textContent = idx + 1;
+        tr.appendChild(tdIndex);
+
+        const tdAddr = document.createElement("td");
+        tdAddr.textContent = row[addressKey];
+        tdAddr.classList.add("mono");
+        tr.appendChild(tdAddr);
+
+        const tdValue = document.createElement("td");
+        tdValue.textContent = formatNumber(row[valueKey]);
+        tr.appendChild(tdValue);
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    function renderDashboard(result) {
+      const overview = result.overview || {};
+      const charts = result.charts || {};
+      const tables = result.tables || {};
+
+      setOverview(overview);
+
+      // 공통 labels
+      const volLabels = (charts.volume || []).map(d => formatDateFromUnixSeconds(d.time));
+      const balLabels = (charts.balance || []).map(d => formatDateFromUnixSeconds(d.time));
+      const traderLabels = (charts.traders || []).map(d => formatDateFromUnixSeconds(d.time));
+      const tradesLabels = (charts.trades || []).map(d => formatDateFromUnixSeconds(d.time));
+      const feesLabels = (charts.feesRewards || []).map(d => formatDateFromUnixSeconds(d.time));
+
+      // Volume: daily, cumulative
+      if (charts.volume && charts.volume.length) {
+        const daily = charts.volume.map(d => d.dailyVolume || 0);
+        const cumulative = charts.volume.map(d => d.cumulativeVolume || 0);
+        buildLineChart("dailyVolumeChart", volLabels, daily, "Daily Volume");
+        buildLineChart("cumulativeVolumeChart", volLabels, cumulative, "Cumulative Volume");
+      }
+
+      // Net inflows: daily, cumulative
+      if (charts.balance && charts.balance.length) {
+        const daily = charts.balance.map(d => d.dailyNetInflows || 0);
+        const cumulative = charts.balance.map(d => d.cumulativeNetInflows || 0);
+        buildLineChart("dailyNetInflowsChart", balLabels, daily, "Daily Net Inflows");
+        buildLineChart("cumulativeNetInflowsChart", balLabels, cumulative, "Cumulative Net Inflows");
+      }
+
+      // Traders: daily, cumulative
+      if (charts.traders && charts.traders.length) {
+        const daily = charts.traders.map(d => d.dailyNewTraders || 0);
+        const cumulative = charts.traders.map(d => d.cumulativeTraders || 0);
+        buildLineChart("dailyNewTradersChart", traderLabels, daily, "Daily New Traders");
+        buildLineChart("cumulativeTradersChart", traderLabels, cumulative, "Cumulative Traders");
+      }
+
+      // Trades: daily, cumulative
+      if (charts.trades && charts.trades.length) {
+        const daily = charts.trades.map(d => d.dailyTrades || 0);
+        const cumulative = charts.trades.map(d => d.cumulativeTrades || 0);
+        buildLineChart("dailyTradesChart", tradesLabels, daily, "Daily Trades");
+        buildLineChart("cumulativeTradesChart", tradesLabels, cumulative, "Cumulative Trades");
+      }
+
+      // Fees & Rewards: daily fees, cumulative rewards
+      if (charts.feesRewards && charts.feesRewards.length) {
+        const dailyFees = charts.feesRewards.map(d => d.dailyFees || 0);
+        const cumulativeRewards = charts.feesRewards.map(d => d.cumulativeRewards || 0);
+        buildLineChart("dailyFeesChart", feesLabels, dailyFees, "Daily Fees");
+        buildLineChart("cumulativeRewardsChart", feesLabels, cumulativeRewards, "Cumulative Rewards");
+      }
+
+      // Trader shares (stacked bar)
+      if (charts.traderShares && charts.traderShares.length) {
+        buildStackedBarChartForTraderShares("traderSharesChart", charts.traderShares);
+        setTokenShareSummary(charts.traderShares);
+      } else {
+        setTokenShareSummary([]);
+      }
+
+      // Tables
+      fillTable("topTradersTableBody", tables.topTradersByVolume || [], "address", "volumeUSDT");
+      fillTable("topDepositorsTableBody", tables.topDepositors || [], "address", "depositsUSDT");
+      fillTable("topBalancesTableBody", tables.topAccountBalances || [], "address", "balanceUSDT");
+    }
+
+    function handleJsonPaste() {
+      const errorBox = document.getElementById("errorBox");
+      errorBox.textContent = "";
+      const input = document.getElementById("jsonInput").value.trim();
+
+      if (!input) {
+        errorBox.textContent = "JSON을 먼저 붙여넣어 주세요.";
+        return;
+      }
+
+      try {
+        const json = JSON.parse(input);
+        const result = json.result || json;
+        if (!result) {
+          throw new Error("result 필드를 찾을 수 없습니다.");
+        }
+        renderDashboard(result);
+      } catch (err) {
+        console.error(err);
+        errorBox.textContent = "JSON 파싱 또는 렌더링 중 오류가 발생했습니다: " + err.message;
+      }
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("loadJsonButton").addEventListener("click", handleJsonPaste);
+    });
+  </script>
+</body>
+</html>
