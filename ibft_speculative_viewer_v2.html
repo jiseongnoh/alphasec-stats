@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>IBFT Speculative Execution Timeline Viewer</title>
+  <style>
+    :root{
+      --bg:#0b1220; --panel:#111a2e; --panel2:#0f1830;
+      --text:#e8eefc; --muted:#a8b3d6; --border:#2a355a; --accent:#9cc0ff;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:var(--bg);color:var(--text)}
+    header{padding:14px 18px;border-bottom:1px solid var(--border);position:sticky;top:0;background:rgba(11,18,32,.92);backdrop-filter:blur(6px);z-index:10}
+    header h1{margin:0 0 6px 0;font-size:16px;font-weight:800}
+    header .sub{font-size:12px;color:var(--muted);line-height:1.45}
+    main{padding:14px 18px 26px;display:grid;grid-template-columns: 420px 1fr;gap:14px}
+    .card{border:1px solid var(--border);background:var(--panel);border-radius:12px;padding:12px}
+    .card h2{margin:0 0 10px 0;font-size:13px}
+    .grid{display:grid;grid-template-columns: 1fr 1fr;gap:10px}
+    .field{display:flex;flex-direction:column;gap:6px}
+    label{font-size:12px;color:var(--muted)}
+    input, select{
+      background:var(--panel2); color:var(--text);
+      border:1px solid var(--border); border-radius:10px;
+      padding:8px 10px; font-size:12px; outline:none;
+    }
+    input:focus, select:focus{border-color:var(--accent)}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .pill{font-size:12px;border:1px solid var(--border);border-radius:999px;padding:6px 10px;background:var(--panel2);color:var(--muted)}
+    .pill b{color:var(--text)}
+    .btn{border:1px solid var(--border);background:var(--panel2);color:var(--text);padding:7px 10px;border-radius:10px;cursor:pointer;font-size:12px}
+    .btn:hover{filter:brightness(1.05)}
+    .viewport{border:1px solid var(--border);border-radius:12px;background:#fff;overflow:auto;height: calc(100vh - 120px);}
+    .svgwrap{transform-origin:0 0; display:inline-block}
+    .footer{margin-top:10px;color:var(--muted);font-size:12px;line-height:1.45}
+    .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+    .hr{height:1px;background:var(--border);margin:12px 0}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>IBFT Speculative Execution Timeline Viewer</h1>
+    <div class="sub">
+      Speculative execution model: validators begin executing as soon as the <span class="mono">first bytes needed</span> arrive (streaming decode) and/or are locally available (mempool hit),
+      not after the full block body is received. rx-start is modeled as p50/p95 driven by Δ, queueing, and sender scheduling tail.
+    </div>
+  </header>
+
+  <main>
+    <div class="card">
+      <h2>Parameters</h2>
+
+      <div class="grid">
+        <div class="field">
+          <label>Rounds</label>
+          <input id="rounds" type="number" value="5" min="1" max="20" />
+        </div>
+        <div class="field">
+          <label>Block time (ms)</label>
+          <input id="blockTime" type="number" value="1000" min="200" max="5000" />
+        </div>
+
+        <div class="field">
+          <label>Proposer exec time E_proposer (ms)</label>
+          <input id="execProp" type="number" value="450" min="0" max="2000" />
+        </div>
+        <div class="field">
+          <label>Validator vote-critical exec E_vote (ms)</label>
+          <input id="execVote" type="number" value="450" min="0" max="2000" />
+        </div>
+
+        <div class="field">
+          <label>Post-commit insert/flush I_post (ms)</label>
+          <input id="insertPost" type="number" value="250" min="0" max="2000" />
+        </div>
+        <div class="field">
+          <label>Tx count / block</label>
+          <input id="txCount" type="number" value="10000" min="1" max="200000" />
+        </div>
+
+        <div class="field">
+          <label>One-way latency Δ (ms)</label>
+          <input id="delta" type="number" value="30" min="0" max="500" />
+        </div>
+        <div class="field">
+          <label>Queue / scheduling overhead (ms)</label>
+          <input id="queue" type="number" value="5" min="0" max="500" />
+        </div>
+
+        <div class="field">
+          <label>Processing overhead σ (ms)</label>
+          <input id="sigma" type="number" value="40" min="0" max="1000" />
+        </div>
+        <div class="field">
+          <label>Propagation / fanout mode</label>
+          <select id="mode">
+            <option value="fullmesh">Full-mesh proposal push (worst tail)</option>
+            <option value="fanout8">Tree fanout k=8 (reduced tail)</option>
+            <option value="compact">Compact/header-first (minimal tail)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>cw model (prepare+commit): cw ≈ a·Δ + σ</label>
+          <select id="cwModel">
+            <option value="ibft">IBFT conservative (a=8)</option>
+            <option value="ibft_fast">IBFT aggressive/QoS (a=6)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Zoom</label>
+          <select id="zoom">
+            <option value="0.75">75%</option>
+            <option value="1" selected>100%</option>
+            <option value="1.25">125%</option>
+            <option value="1.5">150%</option>
+            <option value="2">200%</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <h2>Preprepare payload (header-only / tx hashes / short IDs / full body)</h2>
+      <div class="grid">
+        <div class="field">
+          <label>PP payload type</label>
+          <select id="ppType">
+            <option value="fullbody">Full body (header + tx bodies)</option>
+            <option value="txhashes">Header + tx hashes (inventory)</option>
+            <option value="shortids">Header + compact short-IDs</option>
+            <option value="headeronly">Header only (block meta)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Outbound bandwidth for PP send (Mbps)</label>
+          <input id="ppMbps" type="number" value="160" min="1" max="100000" />
+        </div>
+
+        <div class="field">
+          <label>Full body size (MB) (used when PP type = fullbody)</label>
+          <input id="bodyMB" type="number" value="2" min="0.01" max="100" step="0.01" />
+        </div>
+        <div class="field">
+          <label>PP serialization overhead (ms)</label>
+          <input id="ppSerMs" type="number" value="1" min="0" max="2000" />
+        </div>
+
+        <div class="field">
+          <label>Mempool hit rate (%) for missing bodies</label>
+          <input id="hitRate" type="number" value="95" min="0" max="100" />
+        </div>
+        <div class="field">
+          <label>Missing body fetch penalty (ms) if not in mempool</label>
+          <input id="missPenalty" type="number" value="50" min="0" max="2000" />
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <span class="pill">Computed <b>cw</b>: <span id="cwOut" class="mono"></span> ms</span>
+        <span class="pill">PP payload: <span id="ppKBOut" class="mono"></span> KB</span>
+        <span class="pill">Computed <b>pp_send</b>: <span id="ppSendOut" class="mono"></span> ms</span>
+        <span class="pill">rx-start <b>p50</b>: <span id="rx50Out" class="mono"></span> ms</span>
+        <span class="pill">rx-start <b>p95</b>: <span id="rx95Out" class="mono"></span> ms</span>
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="reset">Reset defaults</button>
+        <span class="footer">
+          Interpretation: “Speculative exec” starts when you have enough info+bytes to begin executing txs (streaming) + local availability (hit rate).
+          Smaller PP payload reduces scheduling tail and lets rx-start approach Δ+queue. Hash/shortID PP relies on mempool (hit rate) to avoid fetch penalty.
+        </span>
+      </div>
+    </div>
+
+    <div class="card" style="padding:10px">
+      <h2 style="margin-bottom:8px">Timeline</h2>
+      <div class="viewport">
+        <div id="svgWrap" class="svgwrap"></div>
+      </div>
+      <div class="footer">
+        Validator lane is vote-critical exec only (must finish before cw end to vote safely). p50 is solid; p95 is dashed outline.
+        Post-commit insert can slip beyond cw and even overlap next proposer exec (client pipeline), but prolonged insert will backpressure over time.
+      </div>
+    </div>
+  </main>
+
+<script>
+  function clamp(n, lo, hi){ return Math.max(lo, Math.min(hi, n)); }
+  function num(id){ return parseFloat(document.getElementById(id).value); }
+  function val(id){ return document.getElementById(id).value; }
+
+  function computeModeEffectivePp(ppSend, mode){
+    // effective sender scheduling tail for first-bytes arrival
+    if(mode === "fanout8") return ppSend / 8.0;
+    if(mode === "compact") return Math.max(1.0, ppSend);
+    return ppSend;
+  }
+
+  function computeCw(delta, sigma, cwModel){
+    const a = (cwModel === "ibft_fast") ? 6.0 : 8.0;
+    return a * delta + sigma;
+  }
+
+  function ppPayloadBytes(ppType, txCount, bodyMB){
+    // very simple sizing model
+    const headerBytes = 1500;
+    if(ppType === "headeronly") return headerBytes;
+    if(ppType === "txhashes"){
+      // tx hashes: 32B each + 20% overhead
+      return headerBytes + Math.ceil(txCount * 32 * 1.2);
+    }
+    if(ppType === "shortids"){
+      // short ids: 6B each + 30% overhead
+      return headerBytes + Math.ceil(txCount * 6 * 1.3);
+    }
+    // full body
+    return Math.ceil(bodyMB * 1024 * 1024);
+  }
+
+  function computePpSendMs(ppBytes, ppMbps, ppSerMs){
+    const bps = ppMbps * 1e6;
+    const ms = (ppBytes * 8.0 / bps) * 1000.0;
+    return ms + ppSerMs;
+  }
+
+  function rxStartQuantiles(execEnd, ppSend, delta, queue, mode){
+    const ppEff = computeModeEffectivePp(ppSend, mode);
+    // rx-start relative to proposer exec-end (streaming): latency + queue + scheduling position
+    const p50 = execEnd + delta + queue + 0.50 * ppEff;
+    const p95 = execEnd + delta + queue + 0.95 * ppEff;
+    return {p50, p95, ppEff};
+  }
+
+  function render(){
+    const rounds = clamp(num("rounds"), 1, 20);
+    const blockTime = clamp(num("blockTime"), 200, 5000);
+
+    const execProp = clamp(num("execProp"), 0, 4000);
+    const execVote = clamp(num("execVote"), 0, 4000);
+    const insertPost = clamp(num("insertPost"), 0, 4000);
+    const txCount = clamp(num("txCount"), 1, 1e9);
+
+    const delta = clamp(num("delta"), 0, 1000);
+    const queue = clamp(num("queue"), 0, 2000);
+    const sigma = clamp(num("sigma"), 0, 4000);
+
+    const mode = val("mode");
+    const cwModel = val("cwModel");
+
+    const ppType = val("ppType");
+    const ppMbps = clamp(num("ppMbps"), 1, 1e9);
+    const bodyMB = clamp(num("bodyMB"), 0.0001, 1e6);
+    const ppSerMs = clamp(num("ppSerMs"), 0, 1e6);
+
+    const hitRatePct = clamp(num("hitRate"), 0, 100);
+    const missPenalty = clamp(num("missPenalty"), 0, 1e6);
+
+    const zoom = parseFloat(val("zoom"));
+
+    const cw = computeCw(delta, sigma, cwModel);
+
+    const ppBytes = ppPayloadBytes(ppType, txCount, bodyMB);
+    const ppSend = computePpSendMs(ppBytes, ppMbps, ppSerMs);
+
+    // missing body penalty applies when PP doesn't carry bodies
+    const hit = hitRatePct / 100.0;
+    const bodyPenalty = (ppType === "fullbody") ? 0.0 : (1.0 - hit) * missPenalty;
+
+    // rx-start quantiles for round 1 labels
+    const rxQ = rxStartQuantiles(execProp, ppSend, delta, queue, mode);
+    const rx50 = (rxQ.p50 - execProp) + bodyPenalty;
+    const rx95 = (rxQ.p95 - execProp) + bodyPenalty;
+
+    document.getElementById("cwOut").textContent = cw.toFixed(1);
+    document.getElementById("ppKBOut").textContent = (ppBytes/1024.0).toFixed(1);
+    document.getElementById("ppSendOut").textContent = ppSend.toFixed(2);
+    document.getElementById("rx50Out").textContent = rx50.toFixed(1);
+    document.getElementById("rx95Out").textContent = rx95.toFixed(1);
+
+    // SVG layout
+    const width = 1800, leftMargin = 260, rightMargin = 30, topAxisY = 80;
+    const plotW = width - leftMargin - rightMargin;
+    const timeMax = rounds * blockTime;
+    const scale = plotW / timeMax;
+
+    const laneH = 40, laneGap = 8;
+    const lanesPerRound = 4; // proposer, cw, validator vote-critical exec, post insert
+    const nLanes = rounds * lanesPerRound;
+    const height = 70 + (nLanes * (laneH + laneGap)) + 90;
+
+    function x(ms){ return leftMargin + ms * scale; }
+
+    let tickStep = 500;
+    if(timeMax <= 2000) tickStep = 250;
+    if(timeMax >= 8000) tickStep = 1000;
+
+    const ticks = [];
+    for(let t=0; t<=timeMax; t+=tickStep) ticks.push(t);
+
+    const style = `
+      .t{font-family:ui-monospace,Menlo,Consolas,monospace;fill:#111}
+      .title{font-size:16px;font-weight:700}
+      .lbl{font-size:12px;font-weight:700}
+      .small{font-size:11px}
+      .axis{stroke:#111;stroke-width:2}
+      .grid{stroke:#d0d0d0;stroke-width:1}
+      .lane{fill:#fff;stroke:#111;stroke-width:1}
+      .barExec{fill:#e6f2ff;stroke:#111;stroke-width:1}
+      .barSend{fill:#fff3e6;stroke:#111;stroke-width:1}
+      .barCons{fill:#e9ffe6;stroke:#111;stroke-width:1}
+      .barVal{fill:#f5f5f5;stroke:#111;stroke-width:1}
+      .barVal95{fill:none;stroke:#111;stroke-width:2;stroke-dasharray:6 4}
+      .barIns{fill:#f0f0ff;stroke:#111;stroke-width:1}
+      .warn{fill:#ffe6e6;stroke:#111;stroke-width:1}
+      .marker{stroke:#111;stroke-width:1.5;stroke-dasharray:6 4}
+    `;
+
+    let s = '';
+    s += `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`;
+    s += `<defs><style>${style}</style></defs>`;
+    s += `<rect width="100%" height="100%" fill="#fff"/>`;
+    s += `<text class="t title" x="20" y="28">IBFT speculative-exec timeline (PP=${ppType}, pp_send=${ppSend.toFixed(2)}ms, hit=${hitRatePct}%)</text>`;
+    s += `<text class="t small" x="20" y="48">cw≈a·Δ+σ=${cw.toFixed(1)}ms (Δ=${delta}ms, σ=${sigma}ms, a=${(cwModel==="ibft_fast"?6:8)}), pp_eff=${computeModeEffectivePp(ppSend,mode).toFixed(2)}ms, bodyPenalty=${bodyPenalty.toFixed(1)}ms</text>`;
+
+    s += `<line class="axis" x1="${leftMargin}" y1="${topAxisY}" x2="${width-rightMargin}" y2="${topAxisY}"/>`;
+
+    for(const t of ticks){
+      const xt = x(t);
+      s += `<line class="grid" x1="${xt.toFixed(1)}" y1="${(topAxisY+10)}" x2="${xt.toFixed(1)}" y2="${(height-40)}"/>`;
+      s += `<text class="t small" x="${(xt-12).toFixed(1)}" y="${(topAxisY-10)}">${t}</text>`;
+    }
+
+    for(let r=1; r<=rounds; r++){
+      const ms = r * blockTime;
+      const xm = x(ms);
+      s += `<line class="marker" x1="${xm.toFixed(1)}" y1="${(topAxisY+10)}" x2="${xm.toFixed(1)}" y2="${(height-40)}"/>`;
+      s += `<text class="t small" x="${(xm-38).toFixed(1)}" y="${(topAxisY+26)}">${ms}ms</text>`;
+    }
+
+    const y0 = topAxisY + 55;
+
+    for(let r=1; r<=rounds; r++){
+      const roundStart = (r-1) * blockTime;
+
+      const execStart = roundStart;
+      const execEnd = execStart + execProp;
+      const sendStart = execEnd;
+      const sendEnd = sendStart + ppSend;
+
+      const consStart = sendEnd;
+      const consEnd = consStart + cw;
+
+      const rxQ2 = rxStartQuantiles(execEnd, ppSend, delta, queue, mode);
+      const valStart50 = rxQ2.p50 + bodyPenalty;
+      const valStart95 = rxQ2.p95 + bodyPenalty;
+
+      const valEnd50 = valStart50 + execVote;
+      const valEnd95 = valStart95 + execVote;
+
+      const insStart50 = Math.max(consEnd, valEnd50);
+      const insStart95 = Math.max(consEnd, valEnd95);
+      const insEnd50 = insStart50 + insertPost;
+      const insEnd95 = insStart95 + insertPost;
+
+      const base = (r-1) * lanesPerRound;
+      const yProp = y0 + base * (laneH + laneGap);
+      const yCons = y0 + (base+1) * (laneH + laneGap);
+      const yVal  = y0 + (base+2) * (laneH + laneGap);
+      const yIns  = y0 + (base+3) * (laneH + laneGap);
+
+      s += `<rect class="lane" x="20" y="${yProp}" width="${width-40}" height="${laneH}"/>`;
+      s += `<text class="t lbl" x="30" y="${yProp+26}">Proposer v${r}</text>`;
+
+      s += `<rect class="lane" x="20" y="${yCons}" width="${width-40}" height="${laneH}"/>`;
+      s += `<text class="t lbl" x="30" y="${yCons+26}">Consensus window (cw)</text>`;
+
+      s += `<rect class="lane" x="20" y="${yVal}" width="${width-40}" height="${laneH}"/>`;
+      s += `<text class="t lbl" x="30" y="${yVal+26}">Validators: speculative vote-critical exec (p50 solid / p95 dashed)</text>`;
+
+      s += `<rect class="lane" x="20" y="${yIns}" width="${width-40}" height="${laneH}"/>`;
+      s += `<text class="t lbl" x="30" y="${yIns+26}">Post-commit insert (p50 solid / p95 dashed)</text>`;
+
+      s += `<rect class="barExec" x="${x(execStart).toFixed(1)}" y="${yProp+6}" width="${(execProp*scale).toFixed(1)}" height="${laneH-12}"/>`;
+      s += `<rect class="barSend" x="${x(sendStart).toFixed(1)}" y="${yProp+6}" width="${(ppSend*scale).toFixed(1)}" height="${laneH-12}"/>`;
+      s += `<text class="t small" x="${(x(execStart)+6).toFixed(1)}" y="${yProp+24}">Exec ${Math.round(execStart)}-${Math.round(execEnd)}</text>`;
+      s += `<text class="t small" x="${(x(sendStart)+6).toFixed(1)}" y="${yProp+38}">PP send ${Math.round(sendStart)}-${Math.round(sendEnd)}</text>`;
+
+      s += `<rect class="barCons" x="${x(consStart).toFixed(1)}" y="${yCons+6}" width="${(cw*scale).toFixed(1)}" height="${laneH-12}"/>`;
+      s += `<text class="t small" x="${(x(consStart)+6).toFixed(1)}" y="${yCons+24}">cw ${consStart.toFixed(1)}-${consEnd.toFixed(1)}</text>`;
+
+      const cls50 = (valEnd50 <= consEnd) ? "barVal" : "warn";
+      s += `<rect class="${cls50}" x="${x(valStart50).toFixed(1)}" y="${yVal+6}" width="${(execVote*scale).toFixed(1)}" height="${laneH-12}"/>`;
+      s += `<rect class="barVal95" x="${x(valStart95).toFixed(1)}" y="${yVal+6}" width="${(execVote*scale).toFixed(1)}" height="${laneH-12}"/>`;
+      s += `<text class="t small" x="${(x(valStart50)+6).toFixed(1)}" y="${yVal+24}">p50 ${valStart50.toFixed(1)}-${valEnd50.toFixed(1)}</text>`;
+      s += `<text class="t small" x="${(x(valStart95)+6).toFixed(1)}" y="${yVal+38}">p95 ${valStart95.toFixed(1)}-${valEnd95.toFixed(1)} | slack ${(consEnd-valEnd95).toFixed(1)}ms</text>`;
+
+      const insCls50 = (insEnd50 <= roundStart + blockTime) ? "barIns" : "warn";
+      s += `<rect class="${insCls50}" x="${x(insStart50).toFixed(1)}" y="${yIns+6}" width="${(insertPost*scale).toFixed(1)}" height="${laneH-12}"/>`;
+      s += `<rect class="barVal95" x="${x(insStart95).toFixed(1)}" y="${yIns+6}" width="${(insertPost*scale).toFixed(1)}" height="${laneH-12}"/>`;
+      s += `<text class="t small" x="${(x(insStart50)+6).toFixed(1)}" y="${yIns+24}">p50 ${insStart50.toFixed(1)}-${insEnd50.toFixed(1)}</text>`;
+      s += `<text class="t small" x="${(x(insStart95)+6).toFixed(1)}" y="${yIns+38}">p95 ${insStart95.toFixed(1)}-${insEnd95.toFixed(1)}</text>`;
+    }
+
+    s += `</svg>`;
+
+    const wrap = document.getElementById("svgWrap");
+    wrap.innerHTML = s;
+    wrap.style.transform = "scale(" + zoom + ")";
+  }
+
+  function bind(){
+    const ids = ["rounds","blockTime","execProp","execVote","insertPost","txCount","delta","queue","sigma","mode","cwModel","zoom","ppType","ppMbps","bodyMB","ppSerMs","hitRate","missPenalty"];
+    for(const id of ids){
+      document.getElementById(id).addEventListener("input", render);
+      document.getElementById(id).addEventListener("change", render);
+    }
+    document.getElementById("reset").addEventListener("click", () => {
+      document.getElementById("rounds").value = 5;
+      document.getElementById("blockTime").value = 1000;
+      document.getElementById("execProp").value = 450;
+      document.getElementById("execVote").value = 450;
+      document.getElementById("insertPost").value = 250;
+      document.getElementById("txCount").value = 10000;
+      document.getElementById("delta").value = 30;
+      document.getElementById("queue").value = 5;
+      document.getElementById("sigma").value = 40;
+      document.getElementById("mode").value = "fullmesh";
+      document.getElementById("cwModel").value = "ibft";
+      document.getElementById("zoom").value = "1";
+      document.getElementById("ppType").value = "fullbody";
+      document.getElementById("ppMbps").value = 160;
+      document.getElementById("bodyMB").value = 2;
+      document.getElementById("ppSerMs").value = 1;
+      document.getElementById("hitRate").value = 95;
+      document.getElementById("missPenalty").value = 50;
+      render();
+    });
+  }
+
+  bind();
+  render();
+</script>
+</body>
+</html>
